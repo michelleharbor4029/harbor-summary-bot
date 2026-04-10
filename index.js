@@ -1,5 +1,6 @@
 const { App } = require('@slack/bolt');
 const Anthropic = require('@anthropic-ai/sdk');
+const pdf = require('pdf-parse');
 
 const app = new App({
   token: process.env.SLACK_BOT_TOKEN,
@@ -21,18 +22,25 @@ async function summarizeWithClaude(content, type) {
   return message.content[0].text;
 }
 
-// Handle messages with files
 app.event('message', async ({ event, client }) => {
   try {
-    // Handle file uploads
     if (event.files && event.files.length > 0) {
       for (const file of event.files) {
         if (!file.url_private) continue;
-        
+
         const response = await fetch(file.url_private, {
           headers: { Authorization: `Bearer ${process.env.SLACK_BOT_TOKEN}` }
         });
-        const text = await response.text();
+
+        let text = '';
+        if (file.mimetype === 'application/pdf') {
+          const buffer = Buffer.from(await response.arrayBuffer());
+          const parsed = await pdf(buffer);
+          text = parsed.text;
+        } else {
+          text = await response.text();
+        }
+
         if (!text || text.length < 50) continue;
 
         const summary = await summarizeWithClaude(text.slice(0, 8000), 'document');
@@ -44,7 +52,6 @@ app.event('message', async ({ event, client }) => {
       }
     }
 
-    // Handle messages with links
     if (event.attachments && event.attachments.length > 0) {
       for (const attachment of event.attachments) {
         const content = [attachment.title, attachment.text, attachment.pretext]
