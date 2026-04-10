@@ -16,7 +16,7 @@ async function summarizeWithClaude(content, type) {
     max_tokens: 1024,
     messages: [{
       role: 'user',
-      content: `Summarize the following ${type} in bullet points. Be concise - key facts, numbers, and decisions only:\n\n${content}`
+      content: `You are summarizing documents for a commercial real estate private equity firm. Analyze this document and provide a thorough summary tailored to its content type. If it contains deals/transactions, include for each: asset type, location, size, price, price per sf/unit, cap rate or yield, buyer, seller, and broker. If it contains market data, summarize key trends, sector performance, and notable statistics. If it contains people/personnel news, include names, firms, and roles. If it's a report or analysis, summarize key findings and data points. Use bullet points throughout. Be thorough - do not omit material information.\n\n${content}`
     }]
   });
   return message.content[0].text;
