@@ -10,7 +10,7 @@ const app = new App({
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
-const PROMPT = 'You are summarizing documents for a commercial real estate private equity firm. Analyze this document and provide a concise summary. Use plain bullet points only - no markdown headers, no bold text, no asterisks, no hashtags. If it contains deals, include per deal: asset type, location, size, price, buyer and seller, cap rate if mentioned. Keep each deal to 2-3 bullets max. If it contains market data, include only the most notable stats. If it contains people news, one bullet per person max. Total summary should be scannable in under 60 seconds.';
+const PROMPT = 'Summarize this document in 5-7 bullet points for a commercial real estate firm. Each bullet starts with a dash (-). No markdown, no bold, no headers. Cover only the most important deals, data, or news. Be brief.';
 
 async function summarizeWithClaude(content) {
   const message = await anthropic.messages.create({
