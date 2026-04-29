@@ -1,6 +1,7 @@
 const { App } = require('@slack/bolt');
 const Anthropic = require('@anthropic-ai/sdk');
 const pdf = require('pdf-parse');
+const mammoth = require('mammoth');
 
 const app = new App({
   token: process.env.SLACK_BOT_TOKEN,
@@ -10,7 +11,7 @@ const app = new App({
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
-const PROMPT = 'Summarize this document in 5-7 bullet points for a commercial real estate firm. Each bullet starts with a dash (-). No markdown, no bold, no headers. Cover only the most important deals, data, or news. Be brief.';
+const PROMPT = 'Summarize only what is actually in this document. Do not add outside knowledge or make anything up. Use plain bullet points starting with a dash (-). No markdown, no bold, no headers. Keep it concise - only the most important facts, numbers, names, and decisions. If it is a legal or contract document, summarize the key deal terms, parties, dates, amounts, and obligations only.';
 
 async function summarizeWithClaude(content) {
   const message = await anthropic.messages.create({
@@ -35,45 +36,17 @@ app.event('message', async ({ event, client }) => {
         });
 
         let text = '';
+
         if (file.mimetype === 'application/pdf') {
           const buffer = Buffer.from(await response.arrayBuffer());
           const parsed = await pdf(buffer);
           text = parsed.text;
+        } else if (
+          file.mimetype === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
+          file.name.endsWith('.docx')
+        ) {
+          const buffer = Buffer.from(await response.arrayBuffer());
+          const result = await mammoth.extractRawText({ buffer });
+          text = result.value;
         } else {
           text = await response.text();
-        }
-
-        if (!text || text.length < 50) continue;
-
-        const summary = await summarizeWithClaude(text.slice(0, 8000));
-        await client.chat.postMessage({
-          channel: event.channel,
-          thread_ts: event.ts,
-          text: 'Summary of ' + file.name + ':\n' + summary
-        });
-      }
-    }
-
-    if (event.attachments && event.attachments.length > 0) {
-      for (const attachment of event.attachments) {
-        const content = [attachment.title, attachment.text, attachment.pretext]
-          .filter(Boolean).join('\n');
-        if (!content || content.length < 50) continue;
-
-        const summary = await summarizeWithClaude(content);
-        await client.chat.postMessage({
-          channel: event.channel,
-          thread_ts: event.ts,
-          text: 'Summary:\n' + summary
-        });
-      }
-    }
-  } catch (err) {
-    console.error('Error:', err);
-  }
-});
-
-(async () => {
-  await app.start(process.env.PORT || 3000);
-  console.log('Harbor Summary Bot is running');
-})();
