@@ -50,3 +50,4 @@ app.event('message', async ({ event, client }) => {
           text = result.value;
         } else {
           text = await response.text();
+})();
