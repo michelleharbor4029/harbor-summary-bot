@@ -50,4 +50,39 @@ app.event('message', async ({ event, client }) => {
           text = result.value;
         } else {
           text = await response.text();
+        }
+
+        if (!text || text.length < 50) continue;
+
+        const summary = await summarizeWithClaude(text.slice(0, 8000));
+        await client.chat.postMessage({
+          channel: event.channel,
+          thread_ts: event.ts,
+          text: 'Summary of ' + file.name + ':\n' + summary
+        });
+      }
+    }
+
+    if (event.attachments && event.attachments.length > 0) {
+      for (const attachment of event.attachments) {
+        const content = [attachment.title, attachment.text, attachment.pretext]
+          .filter(Boolean).join('\n');
+        if (!content || content.length < 50) continue;
+
+        const summary = await summarizeWithClaude(content);
+        await client.chat.postMessage({
+          channel: event.channel,
+          thread_ts: event.ts,
+          text: 'Summary:\n' + summary
+        });
+      }
+    }
+  } catch (err) {
+    console.error('Error:', err);
+  }
+});
+
+(async () => {
+  await app.start(process.env.PORT || 3000);
+  console.log('Harbor Summary Bot is running');
 })();
