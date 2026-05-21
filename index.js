@@ -2,6 +2,9 @@ const { App } = require('@slack/bolt');
 const Anthropic = require('@anthropic-ai/sdk');
 const pdf = require('pdf-parse');
 const mammoth = require('mammoth');
+const { getDocument } = require('pdfjs-dist/legacy/build/pdf.mjs');
+const JSZip = require('jszip');
+const { parseStringPromise } = require('xml2js');
 
 const app = new App({
   token: process.env.SLACK_BOT_TOKEN,
@@ -11,43 +14,108 @@ const app = new App({
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
-const PROMPT = `Summarize this document for Harbor Capital, a commercial real estate PE firm.
+const PROMPT = `Summarize this document for Harbor Capital.
 
-Read the ENTIRE document carefully. Look for LLC names, entity names, company names, addresses, dollar amounts, dates, and key terms.
+Extract key facts. Skip blank or empty fields entirely.
 
-Identify the document type and extract the key facts:
+For contracts/leases: Landlord/Seller, Tenant/Buyer, Property address, SF, Term, Rent/Price, Earnest money, Closing date, Key terms
+For due diligence: Property, Date, Consultant, Findings, Recommendations, Costs
+For financials: Property, Date, Key totals, NOI, Returns
+For invoices/estimates: Vendor, Amount, Description, Due date
 
-PSA: Buyer (full entity name), Seller (full entity name), Property address, Purchase price, Earnest money, Effective date, DD period, Closing date, Contingencies
+If this document contains REDLINES or TRACK CHANGES:
+- First summarize the current/clean version of the document
+- Then list the key changes that were redlined, added, or deleted
+- Format changes as: "CHANGED: [what was modified]" or "ADDED: [new text]" or "DELETED: [removed text]"
 
-LOI: Landlord, Tenant (full entity name), Property + SF, Rate, Term, TI, Free rent, Escalations, Options
+FORMAT RULES:
+- Start each line with a dash (-)
+- NO headers, NO bold, NO asterisks, NO markdown
+- Skip empty fields - do not say "not specified" or "blank"
+- Just plain facts, one per line`;
 
-LEASE/TAR LEASE/COMMERCIAL CONTRACT: Landlord (full entity name), Tenant (full entity name), Property + SF, Term dates, Rent + escalations, TI, Security deposit, NNN or gross, Options
+// Extract PDF text including form field values
+async function extractPdfText(buffer) {
+  let text = '';
+  
+  // Regular pdf-parse for main text
+  try {
+    const parsed = await pdf(buffer);
+    text = parsed.text;
+  } catch (e) {
+    console.log('pdf-parse failed:', e.message);
+  }
 
-TERM SHEET: Lender, Borrower (full entity name), Loan amount, LTV, Rate, Term, IO period, Prepayment, Guaranty
+  // Also extract form field values (the blue filled-in text)
+  try {
+    const data = new Uint8Array(buffer);
+    const doc = await getDocument({ data }).promise;
+    
+    for (let i = 1; i <= doc.numPages; i++) {
+      const page = await doc.getPage(i);
+      const annotations = await page.getAnnotations();
+      
+      for (const annot of annotations) {
+        if (annot.fieldType && annot.fieldValue) {
+          text += '\n[FORM FIELD: ' + annot.fieldValue + ']';
+        }
+      }
+    }
+  } catch (e) {
+    console.log('pdfjs form extraction failed:', e.message);
+  }
 
-PHASE I ESA: Property, Date, Consultant, RECs found (yes/no), Recommendations
+  return text;
+}
 
-PCA: Property, Date, Consultant, Immediate repairs + cost, Short-term repairs + cost
-
-APPRAISAL: Property, Date, As-is value, As-stabilized value, Cap rate
-
-RENT ROLL: Property, Date, Total SF, Occupancy, Tenant list with SF and rent
-
-INVOICE: Vendor, Invoice #, Amount, Description, Due date
-
-ESTIMATE: Vendor, Scope, Total cost
-
-COI: Insured (full entity name), Carrier, Policy #, Coverage limits
-
-For any other document: Extract type, date, parties (full entity names), key terms, amounts, deadlines
-
-FORMAT RULES - FOLLOW EXACTLY:
-- Plain bullet points with dash (-)
-- NO headers, NO bold, NO markdown, NO asterisks
-- ONLY include fields that are actually in the document
-- DO NOT write "not specified" or "not provided" - just skip missing fields
-- DO NOT add notes or commentary
-- Extract full LLC/entity names exactly as written`;
+// Extract Word doc text WITH track changes/redlines
+async function extractDocxWithRedlines(buffer) {
+  let cleanText = '';
+  let redlineInfo = '';
+  
+  try {
+    // Get clean text using mammoth
+    const result = await mammoth.extractRawText({ buffer });
+    cleanText = result.value;
+    
+    // Parse the docx XML to find track changes
+    const zip = await JSZip.loadAsync(buffer);
+    const documentXml = await zip.file('word/document.xml')?.async('string');
+    
+    if (documentXml) {
+      // Find insertions (w:ins)
+      const insertions = documentXml.match(/<w:ins[^>]*>[\s\S]*?<\/w:ins>/g) || [];
+      for (const ins of insertions) {
+        const textMatch = ins.match(/<w:t[^>]*>([^<]*)<\/w:t>/g);
+        if (textMatch) {
+          const texts = textMatch.map(t => t.replace(/<[^>]+>/g, '')).join('');
+          if (texts.trim()) {
+            redlineInfo += '\n[ADDED: ' + texts.trim() + ']';
+          }
+        }
+      }
+      
+      // Find deletions (w:del)
+      const deletions = documentXml.match(/<w:del[^>]*>[\s\S]*?<\/w:del>/g) || [];
+      for (const del of deletions) {
+        const textMatch = del.match(/<w:delText[^>]*>([^<]*)<\/w:delText>/g);
+        if (textMatch) {
+          const texts = textMatch.map(t => t.replace(/<[^>]+>/g, '')).join('');
+          if (texts.trim()) {
+            redlineInfo += '\n[DELETED: ' + texts.trim() + ']';
+          }
+        }
+      }
+    }
+  } catch (e) {
+    console.log('docx redline extraction failed:', e.message);
+  }
+  
+  if (redlineInfo) {
+    return cleanText + '\n\n--- REDLINE CHANGES ---' + redlineInfo;
+  }
+  return cleanText;
+}
 
 async function summarizeWithClaude(content) {
   const message = await anthropic.messages.create({
@@ -66,38 +134,34 @@ app.event('message', async ({ event, client }) => {
     if (event.files && event.files.length > 0) {
       for (const file of event.files) {
         if (!file.url_private) {
-          console.log('Skipping file - no url_private:', file.name);
+          console.log('Skipping - no url:', file.name);
           continue;
         }
 
-        console.log('Processing file:', file.name, 'Type:', file.mimetype, 'Size:', file.size);
+        console.log('Processing:', file.name, file.mimetype, file.size);
 
         const response = await fetch(file.url_private, {
           headers: { Authorization: 'Bearer ' + process.env.SLACK_BOT_TOKEN }
         });
 
         let text = '';
+        const buffer = Buffer.from(await response.arrayBuffer());
 
         if (file.mimetype === 'application/pdf') {
-          const buffer = Buffer.from(await response.arrayBuffer());
-          const parsed = await pdf(buffer);
-          text = parsed.text;
-          console.log('PDF extracted text length:', text.length);
+          text = await extractPdfText(buffer);
+          console.log('PDF text length:', text.length);
         } else if (
           file.mimetype === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
           file.name.endsWith('.docx')
         ) {
-          const buffer = Buffer.from(await response.arrayBuffer());
-          const result = await mammoth.extractRawText({ buffer });
-          text = result.value;
-          console.log('DOCX extracted text length:', text.length);
+          text = await extractDocxWithRedlines(buffer);
+          console.log('DOCX text length:', text.length);
         } else {
           text = await response.text();
-          console.log('Text file length:', text.length);
         }
 
         if (!text || text.length < 50) {
-          console.log('Skipping file - text too short:', text.length, 'chars');
+          console.log('Skipping - text too short:', text.length);
           continue;
         }
 
@@ -110,7 +174,7 @@ app.event('message', async ({ event, client }) => {
       }
     }
   } catch (err) {
-    console.error('Error processing file:', err);
+    console.error('Error:', err);
   }
 });
 
