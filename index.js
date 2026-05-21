@@ -29,33 +29,13 @@ ESTOPPEL: Tenant, Lease dates, Current rent, Security deposit, Defaults/disputes
 
 SNDA: Lender, Tenant, Landlord, Property address, Key terms
 
-COMMENCEMENT LETTER: Tenant, Commencement date, Rent commencement, Expiration, Delivery condition
-
 TERM SHEET: Lender, Borrower, Loan amount, LTV/LTC, Rate + structure, Term + amortization, IO period, Prepayment, Covenants (DSCR), Guaranty, Reserves
 
-PROMISSORY NOTE: Borrower, Lender, Principal, Interest rate, Payment schedule, Maturity, Default provisions
-
-OPERATING AGREEMENT: Entity name, Members + ownership %, Manager, Capital contributions, Distribution waterfall, Voting rights
-
-PPM: Issuer, Offering amount, Minimum investment, Use of proceeds, Sponsor fees, Distribution policy
-
-K-1: Entity, Tax year, Partner name, Ordinary income/loss, Distributions, Capital account
-
-TITLE COMMITMENT: Property, Date, Title company, Proposed insured + amount, Schedule B-I requirements, Schedule B-II exceptions
-
-ALTA SURVEY: Property, Date, Surveyor, Acreage/SF, Easements, Encroachments, Flood zone
-
 PHASE I ESA: Property, Date, Consultant, RECs (yes/no + list), Recommendations
-
-PHASE II ESA: Property, Date, Sampling results, Contaminants found, Remediation recommendations
 
 PCA: Property, Date, Consultant, Immediate repairs (list + cost), Short-term repairs (list + cost), Total reserve
 
 APPRAISAL: Property, Date, Appraiser, As-is value, As-stabilized value, Cap rate, Key assumptions
-
-ROOF REPORT: Property, Date, Roof type + age, Condition rating, Remaining life, Repairs + cost
-
-BOV: Property, Date, Broker, Estimated value, Cap rate assumption
 
 RENT ROLL: Property, As-of date, Total SF, Occupancy rate, Tenant list with SF + rent + lease dates
 
@@ -63,55 +43,11 @@ PRO FORMA: Property, Date, Hold period, Acquisition price, Debt assumptions, Exi
 
 T-12: Property, Period, GPR, Vacancy, EGI, Expenses by category, NOI
 
-BUDGET: Property, Year, Revenue projections, Expense projections, NOI projection, Capex budget
-
-DRAW SCHEDULE: Project, Draw number, Date, Amount requested, Cumulative to date, Budget vs actual, Remaining
-
-LOAN STATEMENT: Borrower, Lender, Property, Date, Principal balance, Rate, Payment due, Escrow
-
-A/R REPORT: Property, As-of date, Total receivables, Aging buckets (current/30/60/90+), Tenants with balances
-
 INVOICE: Vendor, Invoice # + date, Amount, Description, Due date
 
-ESTIMATE/BID: Vendor, Date, Scope, Total cost, Timeline, Exclusions
-
-SELLER STATEMENT: Property, Seller, Purchase price, Prorations, Credits/debits, Net proceeds
-
-BUYER STATEMENT: Property, Buyer, Purchase price, Prorations, Closing costs, Total funds required
+ESTIMATE/BID: Vendor, Date, Scope, Total cost, Timeline
 
 COI: Insured, Carrier, Policy #, Period, Coverage types + limits, Additional insureds
-
-LANDLORD WAIVER: Landlord, Tenant, Lender, Property, Assets covered, Key terms
-
-COURT DOCS: Case name + number, Court, Filing date, Document type, Relief requested/ruling, Next hearing
-
-CONSTRUCTION CONTRACT: Owner, Contractor, Project, Contract sum + type, Scope, Completion date, Retainage
-
-CHANGE ORDER: Project, Contractor, CO number, Description, Cost impact, Schedule impact
-
-PMA: Owner, Manager, Property, Management fee, Term, Scope, Termination provisions
-
-PUNCH LIST: Project, Date, Total items, Items by category, Target completion
-
-LIEN WAIVER: Project, Contractor, Waiver type, Amount covered, Through date
-
-CO/CERTIFICATE: Property, Issue date, Issuing authority, Permitted use, Conditions
-
-BUILDING PERMIT: Property, Permit #, Issue date, Scope, Expiration
-
-LEASING FLYER: Property, Available SF, Asking rate, Building specs, Contact info
-
-OM (FOR SALE): Property, Asking price, Cap rate, NOI, Highlights, Tenant summary
-
-W-9: Name, Business name, Tax classification, Address, TIN/EIN
-
-1099: Payer, Recipient, Tax year, Type, Amount reported
-
-WIRE INSTRUCTIONS: Recipient, Bank, Routing #, Account #, Reference
-
-EMAIL: From, To, Date, Subject, Key decisions/commitments, Action items, Deadlines
-
-TENANT NOTICE: From, To, Property, Date, Purpose, Effective date, Required action
 
 ARTICLE/MARKET RESEARCH: Publication, Date, Author, Key stats, Trends, Market discussed
 
@@ -138,6 +74,7 @@ async function summarizeWithClaude(content) {
 
 app.event('message', async ({ event, client }) => {
   try {
+    // ONLY process actual uploaded files - not email previews or link unfurls
     if (event.files && event.files.length > 0) {
       for (const file of event.files) {
         if (!file.url_private) {
@@ -184,21 +121,7 @@ app.event('message', async ({ event, client }) => {
         });
       }
     }
-
-    if (event.attachments && event.attachments.length > 0) {
-      for (const attachment of event.attachments) {
-        const content = [attachment.title, attachment.text, attachment.pretext]
-          .filter(Boolean).join('\n');
-        if (!content || content.length < 50) continue;
-
-        const summary = await summarizeWithClaude(content);
-        await client.chat.postMessage({
-          channel: event.channel,
-          thread_ts: event.ts,
-          text: 'Summary:\n' + summary
-        });
-      }
-    }
+    // REMOVED: event.attachments handler - was causing it to summarize email previews instead of actual files
   } catch (err) {
     console.error('Error processing file:', err);
   }
