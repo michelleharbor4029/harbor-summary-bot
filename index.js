@@ -11,54 +11,43 @@ const app = new App({
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
-const PROMPT = `You are summarizing documents for Harbor Capital, a commercial real estate private equity firm focused on industrial assets.
+const PROMPT = `Summarize this document for Harbor Capital, a commercial real estate PE firm.
 
-STEP 1: Identify the document type and extract ONLY the relevant fields:
+Read the ENTIRE document carefully. Look for LLC names, entity names, company names, addresses, dollar amounts, dates, and key terms.
 
-PSA: Buyer, Seller, Property address, Purchase price, Earnest money (amount + refundability), Effective date, DD period + expiration, Closing date, Contingencies, Assignment rights
+Identify the document type and extract the key facts:
 
-LOI: Landlord/Tenant, Property address + SF, Rate ($/SF/YR or MO), Term, TI allowance, Free rent, Escalations, Options (renewal/expansion/termination/ROFR), Conditions
+PSA: Buyer (full entity name), Seller (full entity name), Property address, Purchase price, Earnest money, Effective date, DD period, Closing date, Contingencies
 
-LEASE (including TAR Commercial Lease, TAR Industrial Lease, TAR forms, AIR forms, standard lease agreements): Landlord, Tenant, Address + SF, Commencement date, Rent commencement, Expiration, Base rent + escalations, TI, Free rent months, Security deposit/LOC, NNN or gross, Options
+LOI: Landlord, Tenant (full entity name), Property + SF, Rate, Term, TI, Free rent, Escalations, Options
 
-COMMERCIAL CONTRACT (including TAR Commercial Contract, Earnest Money Contract, TREC forms): Buyer, Seller, Property address, Purchase price, Earnest money, DD period, Closing date, Title company, Contingencies
+LEASE/TAR LEASE/COMMERCIAL CONTRACT: Landlord (full entity name), Tenant (full entity name), Property + SF, Term dates, Rent + escalations, TI, Security deposit, NNN or gross, Options
 
-LEASE AMENDMENT: Parties, Original lease date, Amendment effective date, What changed, New terms
+TERM SHEET: Lender, Borrower (full entity name), Loan amount, LTV, Rate, Term, IO period, Prepayment, Guaranty
 
-ESTOPPEL: Tenant, Lease dates, Current rent, Security deposit, Defaults/disputes, Options remaining
+PHASE I ESA: Property, Date, Consultant, RECs found (yes/no), Recommendations
 
-SNDA: Lender, Tenant, Landlord, Property address, Key terms
+PCA: Property, Date, Consultant, Immediate repairs + cost, Short-term repairs + cost
 
-TERM SHEET: Lender, Borrower, Loan amount, LTV/LTC, Rate + structure, Term + amortization, IO period, Prepayment, Covenants (DSCR), Guaranty, Reserves
+APPRAISAL: Property, Date, As-is value, As-stabilized value, Cap rate
 
-PHASE I ESA: Property, Date, Consultant, RECs (yes/no + list), Recommendations
+RENT ROLL: Property, Date, Total SF, Occupancy, Tenant list with SF and rent
 
-PCA: Property, Date, Consultant, Immediate repairs (list + cost), Short-term repairs (list + cost), Total reserve
+INVOICE: Vendor, Invoice #, Amount, Description, Due date
 
-APPRAISAL: Property, Date, Appraiser, As-is value, As-stabilized value, Cap rate, Key assumptions
+ESTIMATE: Vendor, Scope, Total cost
 
-RENT ROLL: Property, As-of date, Total SF, Occupancy rate, Tenant list with SF + rent + lease dates
+COI: Insured (full entity name), Carrier, Policy #, Coverage limits
 
-PRO FORMA: Property, Date, Hold period, Acquisition price, Debt assumptions, Exit cap, Returns (IRR, MOIC)
+For any other document: Extract type, date, parties (full entity names), key terms, amounts, deadlines
 
-T-12: Property, Period, GPR, Vacancy, EGI, Expenses by category, NOI
-
-INVOICE: Vendor, Invoice # + date, Amount, Description, Due date
-
-ESTIMATE/BID: Vendor, Date, Scope, Total cost, Timeline
-
-COI: Insured, Carrier, Policy #, Period, Coverage types + limits, Additional insureds
-
-ARTICLE/MARKET RESEARCH: Publication, Date, Author, Key stats, Trends, Market discussed
-
-For any other document type: Extract document type, date, parties, key terms, amounts, deadlines, action items
-
-STEP 2: Format your response:
-- Use plain bullet points starting with a dash (-)
-- No markdown, no bold, no headers, no emojis
-- Only extract what is actually in the document
-- Skip fields that are not present
-- Do not add outside knowledge or make anything up`;
+FORMAT RULES - FOLLOW EXACTLY:
+- Plain bullet points with dash (-)
+- NO headers, NO bold, NO markdown, NO asterisks
+- ONLY include fields that are actually in the document
+- DO NOT write "not specified" or "not provided" - just skip missing fields
+- DO NOT add notes or commentary
+- Extract full LLC/entity names exactly as written`;
 
 async function summarizeWithClaude(content) {
   const message = await anthropic.messages.create({
@@ -74,7 +63,6 @@ async function summarizeWithClaude(content) {
 
 app.event('message', async ({ event, client }) => {
   try {
-    // ONLY process actual uploaded files - not email previews or link unfurls
     if (event.files && event.files.length > 0) {
       for (const file of event.files) {
         if (!file.url_private) {
@@ -121,7 +109,6 @@ app.event('message', async ({ event, client }) => {
         });
       }
     }
-    // REMOVED: event.attachments handler - was causing it to summarize email previews instead of actual files
   } catch (err) {
     console.error('Error processing file:', err);
   }
