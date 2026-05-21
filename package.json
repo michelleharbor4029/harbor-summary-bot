@@ -9,6 +9,9 @@
     "@slack/bolt": "^3.17.0",
     "@anthropic-ai/sdk": "^0.20.0",
     "pdf-parse": "^1.1.1",
-    "mammoth": "^1.6.0"
+    "mammoth": "^1.6.0",
+    "pdfjs-dist": "^4.4.168",
+    "jszip": "^3.10.1",
+    "xml2js": "^0.6.2"
   }
 }
