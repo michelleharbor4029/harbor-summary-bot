@@ -19,7 +19,9 @@ PSA: Buyer, Seller, Property address, Purchase price, Earnest money (amount + re
 
 LOI: Landlord/Tenant, Property address + SF, Rate ($/SF/YR or MO), Term, TI allowance, Free rent, Escalations, Options (renewal/expansion/termination/ROFR), Conditions
 
-LEASE: Landlord, Tenant, Address + SF, Commencement date, Rent commencement, Expiration, Base rent + escalations, TI, Free rent months, Security deposit/LOC, NNN or gross, Options
+LEASE (including TAR Commercial Lease, TAR Industrial Lease, TAR forms, AIR forms, standard lease agreements): Landlord, Tenant, Address + SF, Commencement date, Rent commencement, Expiration, Base rent + escalations, TI, Free rent months, Security deposit/LOC, NNN or gross, Options
+
+COMMERCIAL CONTRACT (including TAR Commercial Contract, Earnest Money Contract, TREC forms): Buyer, Seller, Property address, Purchase price, Earnest money, DD period, Closing date, Title company, Contingencies
 
 LEASE AMENDMENT: Parties, Original lease date, Amendment effective date, What changed, New terms
 
@@ -138,7 +140,12 @@ app.event('message', async ({ event, client }) => {
   try {
     if (event.files && event.files.length > 0) {
       for (const file of event.files) {
-        if (!file.url_private) continue;
+        if (!file.url_private) {
+          console.log('Skipping file - no url_private:', file.name);
+          continue;
+        }
+
+        console.log('Processing file:', file.name, 'Type:', file.mimetype, 'Size:', file.size);
 
         const response = await fetch(file.url_private, {
           headers: { Authorization: 'Bearer ' + process.env.SLACK_BOT_TOKEN }
@@ -150,6 +157,7 @@ app.event('message', async ({ event, client }) => {
           const buffer = Buffer.from(await response.arrayBuffer());
           const parsed = await pdf(buffer);
           text = parsed.text;
+          console.log('PDF extracted text length:', text.length);
         } else if (
           file.mimetype === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
           file.name.endsWith('.docx')
@@ -157,11 +165,16 @@ app.event('message', async ({ event, client }) => {
           const buffer = Buffer.from(await response.arrayBuffer());
           const result = await mammoth.extractRawText({ buffer });
           text = result.value;
+          console.log('DOCX extracted text length:', text.length);
         } else {
           text = await response.text();
+          console.log('Text file length:', text.length);
         }
 
-        if (!text || text.length < 50) continue;
+        if (!text || text.length < 50) {
+          console.log('Skipping file - text too short:', text.length, 'chars');
+          continue;
+        }
 
         const summary = await summarizeWithClaude(text.slice(0, 8000));
         await client.chat.postMessage({
@@ -187,7 +200,7 @@ app.event('message', async ({ event, client }) => {
       }
     }
   } catch (err) {
-    console.error('Error:', err);
+    console.error('Error processing file:', err);
   }
 });
 
