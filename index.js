@@ -4,13 +4,13 @@ const pdf = require('pdf-parse');
 const mammoth = require('mammoth');
 const { getDocument } = require('pdfjs-dist/legacy/build/pdf.mjs');
 const JSZip = require('jszip');
+const { abstractDocument, summarizeFallback, renderAbstract } = require('./abstract');
+const sheets = require('./sheets');
 
 // ---------------------------------------------------------------------------
 // Configuration
 // ---------------------------------------------------------------------------
 const REQUIRED_ENV = ['SLACK_BOT_TOKEN', 'SLACK_SIGNING_SECRET', 'ANTHROPIC_API_KEY'];
-const CLAUDE_MODEL = 'claude-sonnet-4-6'; // drop-in for retired claude-sonnet-4-20250514
-const CLAUDE_MAX_TOKENS = 2048;
 const MIN_TEXT_LENGTH = 50; // below this, extraction effectively failed
 const MAX_CONTENT_CHARS = 24000; // ~6-8k tokens; long docs are truncated with a note
 const MAX_DEDUPE_ENTRIES = 1000;
@@ -21,31 +21,6 @@ const DOCX_TEXT_PARTS = /(document|header\d*|footer\d*|footnotes|endnotes)\.xml$
 
 const log = (...args) => console.log('[harbor-bot]', ...args);
 const logError = (...args) => console.error('[harbor-bot]', ...args);
-
-const PROMPT = `Summarize this document for Harbor Capital.
-
-Extract key facts. Skip blank or empty fields entirely.
-
-For contracts/leases: Landlord/Seller, Tenant/Buyer, Property address, SF, Term, Rent/Price, Earnest money, Closing date, Key terms
-For due diligence: Property, Date, Consultant, Findings, Recommendations, Costs
-For financials: Property, Date, Key totals, NOI, Returns
-For invoices/estimates: Vendor, Amount, Description, Due date
-
-The extracted text may include tagged extras. Treat these as authoritative content and include them:
-- [FIELD name: value] = a filled-in form field (often the key deal terms on TAR/TREC forms)
-- [COMMENT: ...] = a reviewer comment or markup/redline note from the PDF
-- ADDED: / DELETED: lines under "TRACKED CHANGES" = Word redline edits
-
-If this document contains REDLINES or TRACK CHANGES:
-- First summarize the current/clean version of the document
-- Then list the key changes that were redlined, added, or deleted
-- Format changes as: "CHANGED: [what was modified]" or "ADDED: [new text]" or "DELETED: [removed text]"
-
-FORMAT RULES:
-- Start each line with a dash (-)
-- NO headers, NO bold, NO asterisks, NO markdown
-- Skip empty fields - do not say "not specified" or "blank"
-- Just plain facts, one per line`;
 
 // ---------------------------------------------------------------------------
 // File-type routing
@@ -245,14 +220,19 @@ function main() {
   const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
   const processedEvents = new Set();
 
-  async function summarizeWithClaude(content) {
-    const message = await anthropic.messages.create({
-      model: CLAUDE_MODEL,
-      max_tokens: CLAUDE_MAX_TOKENS,
-      messages: [{ role: 'user', content: PROMPT + '\n\n' + content }],
-    });
-    const block = message.content.find((b) => b.type === 'text');
-    return block ? block.text : '(no summary produced)';
+  // Returns { text } for the Slack reply, and { abstract } when structured
+  // extraction succeeded (used for the optional Sheets export). Falls back to a
+  // prose summary so the bot never goes silent if structured output fails.
+  async function summarizeContent(content, fileName, truncated) {
+    try {
+      const abstract = await abstractDocument(anthropic, content);
+      return { text: renderAbstract(abstract, fileName, truncated), abstract };
+    } catch (e) {
+      logError('structured abstraction failed, using prose fallback:', e.message);
+      const prose = await summarizeFallback(anthropic, content);
+      const note = truncated ? '\n\n(Note: document was long; this summary covers the first part.)' : '';
+      return { text: `Summary of ${fileName}:\n${prose}${note}`, abstract: null };
+    }
   }
 
   async function reply(client, event, text) {
@@ -285,9 +265,18 @@ function main() {
     }
 
     const { content, truncated } = clampContent(text);
-    const summary = await summarizeWithClaude(content);
-    const note = truncated ? '\n\n(Note: document was long; this summary covers the first part.)' : '';
-    await reply(client, event, `Summary of ${file.name}:\n${summary}${note}`);
+    const { text: summaryText, abstract } = await summarizeContent(content, file.name, truncated);
+
+    // Slack reply (unchanged interface)
+    await reply(client, event, summaryText);
+
+    // Optional: append the structured row to the deal-tracker sheet. Never
+    // blocks or breaks the Slack path — appendDealRow no-ops if disabled and
+    // swallows its own errors.
+    if (abstract && sheets.isEnabled()) {
+      const wrote = await sheets.appendDealRow(abstract, file.name, new Date().toISOString(), { error: logError });
+      if (wrote) log('appended to deal sheet:', file.name);
+    }
   }
 
   app.event('message', async ({ event, client }) => {
