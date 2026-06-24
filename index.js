@@ -4,7 +4,7 @@ const pdf = require('pdf-parse');
 const mammoth = require('mammoth');
 const { getDocument } = require('pdfjs-dist/legacy/build/pdf.mjs');
 const JSZip = require('jszip');
-const { abstractDocument, summarizeFallback, renderAbstract } = require('./abstract');
+const { abstractDocument, summarizeFallback, ocrPdf, renderAbstract } = require('./abstract');
 const sheets = require('./sheets');
 
 // ---------------------------------------------------------------------------
@@ -13,6 +13,7 @@ const sheets = require('./sheets');
 const REQUIRED_ENV = ['SLACK_BOT_TOKEN', 'SLACK_SIGNING_SECRET', 'ANTHROPIC_API_KEY'];
 const MIN_TEXT_LENGTH = 50; // below this, extraction effectively failed
 const MAX_CONTENT_CHARS = 24000; // ~6-8k tokens; long docs are truncated with a note
+const MAX_PDF_OCR_BYTES = 30 * 1024 * 1024; // Anthropic's PDF request limit is 32MB; stay under it
 const MAX_DEDUPE_ENTRIES = 1000;
 const DEFAULT_PORT = 3000;
 
@@ -253,13 +254,32 @@ function main() {
 
     log('processing', file.name, file.mimetype, file.size);
     const buffer = await downloadFile(file);
-    const text = await extractByKind(kind, buffer);
+    let text = await extractByKind(kind, buffer);
+
+    // Scanned / image-only PDFs have no embedded text layer. Rather than asking
+    // the user to OCR and re-upload, OCR it ourselves via Claude's vision.
+    if (kind === 'pdf' && (!text || text.trim().length < MIN_TEXT_LENGTH)) {
+      if (buffer.length > MAX_PDF_OCR_BYTES) {
+        await reply(
+          client,
+          event,
+          `I downloaded "${file.name}" but it has no readable text layer and is too large (${Math.round(buffer.length / 1024 / 1024)}MB) for me to OCR. Please split it or export a smaller text-based PDF.`
+        );
+        return;
+      }
+      log('no embedded text; running OCR via Claude:', file.name);
+      try {
+        text = await ocrPdf(anthropic, buffer);
+      } catch (e) {
+        logError('OCR failed:', e.message);
+      }
+    }
 
     if (!text || text.trim().length < MIN_TEXT_LENGTH) {
       await reply(
         client,
         event,
-        `I downloaded "${file.name}" but couldn't extract readable text. If it's a scanned/image PDF, run OCR (or export a text-based PDF) and re-upload.`
+        `I downloaded "${file.name}" but couldn't read any text from it, even after OCR. It may be empty, corrupted, or an unsupported format.`
       );
       return;
     }

@@ -5,6 +5,7 @@
 const CLAUDE_MODEL = 'claude-sonnet-4-6';
 const ABSTRACT_MAX_TOKENS = 4096; // structured JSON for a full lease can be large
 const FALLBACK_MAX_TOKENS = 2048;
+const OCR_MAX_TOKENS = 8192; // transcription of a scanned PDF; output is clamped downstream
 
 // JSON Schema for structured outputs. Every object sets additionalProperties:false
 // and lists all properties in `required` (strict structured-output requirement);
@@ -102,6 +103,13 @@ const FALLBACK_PROMPT = `Summarize this document for Harbor Capital (commercial 
 Extract key facts only — parties, property, size, term, rents/prices, earnest money, key dates, and any redline changes.
 Start each line with a dash. No markdown, no headers, no bold. Skip fields that are not present; do not invent anything.`;
 
+const OCR_PROMPT = `This PDF has no extractable text layer — it is scanned or image-based. Transcribe ALL readable text from every page, in reading order, exactly as written.
+
+- Include printed text, handwriting, stamps, and checkbox/selection states. Mark signatures as "[signature]".
+- Write filled-in form fields as "[FIELD label: value]" so the value is unambiguous.
+- Preserve tables row by row. Do NOT summarize, interpret, or omit anything — output the raw transcription only.
+- If a page is blank or illegible, note that briefly and continue.`;
+
 async function abstractDocument(anthropic, content) {
   const message = await anthropic.messages.create({
     model: CLAUDE_MODEL,
@@ -123,6 +131,32 @@ async function summarizeFallback(anthropic, content) {
   });
   const block = message.content.find((b) => b.type === 'text');
   return block ? block.text : '(no summary produced)';
+}
+
+// OCR a scanned/image-only PDF by handing the raw PDF to Claude's vision (base64
+// `document` block — GA, no beta header). Returns the transcribed text, which the
+// caller feeds into the normal abstraction path. The document block must precede
+// the text instruction, and the base64 string must contain no newlines.
+async function ocrPdf(anthropic, buffer) {
+  const message = await anthropic.messages.create({
+    model: CLAUDE_MODEL,
+    max_tokens: OCR_MAX_TOKENS,
+    messages: [
+      {
+        role: 'user',
+        content: [
+          {
+            type: 'document',
+            source: { type: 'base64', media_type: 'application/pdf', data: buffer.toString('base64') },
+          },
+          { type: 'text', text: OCR_PROMPT },
+        ],
+      },
+    ],
+  });
+  if (message.stop_reason === 'refusal') throw new Error('model declined to transcribe the document');
+  const block = message.content.find((b) => b.type === 'text');
+  return block ? block.text : '';
 }
 
 function propertyLine(property) {
@@ -160,6 +194,7 @@ module.exports = {
   DEAL_SCHEMA,
   abstractDocument,
   summarizeFallback,
+  ocrPdf,
   renderAbstract,
   propertyLine,
 };

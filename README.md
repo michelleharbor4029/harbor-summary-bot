@@ -7,13 +7,16 @@ redlines), and posts a structured deal abstraction back in-thread.
 ## What it extracts
 
 - **PDF** — body text, filled form-field values ("blue text" on TAR/TREC/AIR
-  forms), and PDF comment/markup annotations (redline notes).
+  forms), and PDF comment/markup annotations (redline notes). Scanned/image PDFs
+  with no text layer are OCR'd automatically via Claude vision.
 - **Word (.docx)** — body text plus tracked changes (ADDED / DELETED), across
   the document body, headers, and footers.
 - **Text** — `.txt`, `.csv`, `.md`, `.json`, `.xml`, `.html`, `.log`.
 
-Scanned/image PDFs and unsupported types get a clear message in-thread instead
-of failing silently.
+A scanned/image PDF is sent to Claude for OCR automatically — no need to OCR and
+re-upload it yourself. Only a PDF that's still unreadable after OCR (or too large
+to OCR), and genuinely unsupported file types, get a clear message in-thread
+instead of failing silently.
 
 ## Output
 

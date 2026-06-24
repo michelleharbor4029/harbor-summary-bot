@@ -114,6 +114,31 @@ function check(name, cond) {
   check('keeps populated FINANCIALS', sparseOut.includes('FINANCIALS') && sparseOut.includes('Amount: $1,200'));
   check('truncation note appended', abstract.renderAbstract(sparse, 'inv.pdf', true).includes('covers the first part'));
 
+  // ---- PDF OCR fallback (scanned/image PDFs) — fake Anthropic client, no network ----
+  const fakePdf = Buffer.from('%PDF-1.4 fake scanned bytes');
+  let ocrCall = null;
+  const fakeAnthropic = {
+    messages: {
+      create: async (params) => {
+        ocrCall = params;
+        return { stop_reason: 'end_turn', content: [{ type: 'text', text: '[FIELD Buyer: Acme LLC] Purchase price $1,000,000.' }] };
+      },
+    },
+  };
+  const ocrText = await abstract.ocrPdf(fakeAnthropic, fakePdf);
+  check('ocr returns transcribed text', ocrText.includes('Purchase price $1,000,000'));
+  const ocrContent = ocrCall.messages[0].content;
+  const docBlock = ocrContent.find((b) => b.type === 'document');
+  check('ocr sends a PDF document block', docBlock && docBlock.source.media_type === 'application/pdf');
+  check('ocr base64-encodes the buffer', docBlock.source.type === 'base64' && docBlock.source.data === fakePdf.toString('base64'));
+  check('ocr document block precedes the text instruction', ocrContent[0].type === 'document' && ocrContent[1].type === 'text');
+
+  // refusal path throws rather than silently returning empty text
+  const refusingAnthropic = { messages: { create: async () => ({ stop_reason: 'refusal', content: [] }) } };
+  let ocrThrew = false;
+  try { await abstract.ocrPdf(refusingAnthropic, fakePdf); } catch (e) { ocrThrew = true; }
+  check('ocr throws on model refusal', ocrThrew === true);
+
   // ---- schema validity (strict structured-output rules) ----
   function assertStrict(node, path) {
     if (node.type === 'object') {
