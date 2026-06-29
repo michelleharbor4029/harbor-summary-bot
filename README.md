@@ -11,11 +11,14 @@ redlines), and posts a structured deal abstraction back in-thread.
   with no text layer are OCR'd automatically via Claude vision.
 - **Word (.docx)** — body text plus tracked changes (ADDED / DELETED), across
   the document body, headers, and footers.
+- **Excel (.xlsx)** — every sheet's actual cell values (including cached formula
+  results and dates), read row by row so the model sees the real numbers.
+- **Images (PNG / JPG / GIF / WebP)** — transcribed via Claude vision.
 - **Text** — `.txt`, `.csv`, `.md`, `.json`, `.xml`, `.html`, `.log`.
 
 A scanned/image PDF is sent to Claude for OCR automatically — no need to OCR and
-re-upload it yourself. Only a PDF that's still unreadable after OCR (or too large
-to OCR), and genuinely unsupported file types, get a clear message in-thread
+re-upload it yourself. Files over 30MB, content that's still unreadable after OCR,
+and genuinely unsupported types (e.g. legacy `.xls`) get a clear message in-thread
 instead of failing silently.
 
 ## Output

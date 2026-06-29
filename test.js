@@ -2,6 +2,7 @@
 // mapping). No network, no Slack, no Anthropic calls. Run with: npm test
 const assert = require('assert');
 const JSZip = require('jszip');
+const ExcelJS = require('exceljs');
 const extract = require('./index.js');
 const abstract = require('./abstract.js');
 const sheets = require('./sheets.js');
@@ -21,7 +22,18 @@ function check(name, cond) {
   check('docx by extension', extract.getFileKind({ name: 'lease.docx' }) === 'docx');
   check('text file', extract.getFileKind({ name: 'notes.txt' }) === 'text');
   check('csv is text', extract.getFileKind({ name: 'rentroll.csv' }) === 'text');
-  check('xlsx unsupported', extract.getFileKind({ name: 'budget.xlsx' }) === 'unsupported');
+  check('xlsx by extension', extract.getFileKind({ name: 'budget.xlsx' }) === 'xlsx');
+  check('xlsx by mimetype', extract.getFileKind({ mimetype: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }) === 'xlsx');
+  check('png is image', extract.getFileKind({ name: 'site.PNG' }) === 'image');
+  check('jpg is image', extract.getFileKind({ name: 'photo.jpg' }) === 'image');
+  check('image by mimetype', extract.getFileKind({ mimetype: 'image/jpeg' }) === 'image');
+  check('legacy .xls unsupported', extract.getFileKind({ name: 'old.xls' }) === 'unsupported');
+
+  // ---- image media-type mapping (for Claude vision) ----
+  check('png media type', extract.imageMediaType({ name: 'scan.png' }) === 'image/png');
+  check('jpg media type', extract.imageMediaType({ name: 'photo.JPG' }) === 'image/jpeg');
+  check('jpeg by mime', extract.imageMediaType({ mimetype: 'image/jpeg' }) === 'image/jpeg');
+  check('webp media type', extract.imageMediaType({ name: 'pic.webp' }) === 'image/webp');
 
   // ---- PDF form-field value formatting ("blue text") ----
   check('off checkbox empty', extract.formatFieldValue('Off') === '');
@@ -113,6 +125,49 @@ function check(name, cond) {
   check('omits empty PROPERTY section', !sparseOut.includes('PROPERTY'));
   check('keeps populated FINANCIALS', sparseOut.includes('FINANCIALS') && sparseOut.includes('Amount: $1,200'));
   check('truncation note appended', abstract.renderAbstract(sparse, 'inv.pdf', true).includes('covers the first part'));
+
+  // ---- XLSX cell reading (incl. cached formula results, dates, rich text) ----
+  check('cellToString plain number', extract.cellToString({ value: 1000000 }) === '1000000');
+  check('cellToString formula cached result', extract.cellToString({ value: { formula: 'B2*2', result: 2000000 } }) === '2000000');
+  check('cellToString formula without result is empty', extract.cellToString({ value: { formula: 'A1' } }) === '');
+  check('cellToString rich text', extract.cellToString({ value: { richText: [{ text: 'Ac' }, { text: 'me LLC' }] } }) === 'Acme LLC');
+  check('cellToString date as ISO', extract.cellToString({ value: new Date(Date.UTC(2026, 6, 15)) }) === '2026-07-15');
+  check('cellToString empty', extract.cellToString({ value: null }) === '');
+
+  // real .xlsx round-trip: build a workbook, read the actual cells back
+  const wb = new ExcelJS.Workbook();
+  const ws = wb.addWorksheet('Deal');
+  ws.addRow(['Purchase Price', 1000000]);
+  ws.addRow(['Cap Rate', 0.065]);
+  ws.getCell('A3').value = 'Total Value';
+  ws.getCell('B3').value = { formula: 'B1*2', result: 2000000 };
+  const xlsxBuffer = Buffer.from(await wb.xlsx.writeBuffer());
+  const xlsxText = await extract.extractXlsxText(xlsxBuffer);
+  check('xlsx names the sheet', xlsxText.includes('--- SHEET: Deal ---'));
+  check('xlsx reads label + numeric cell', xlsxText.includes('Purchase Price\t1000000'));
+  check('xlsx reads second row', xlsxText.includes('Cap Rate\t0.065'));
+  check('xlsx reads cached formula result', xlsxText.includes('Total Value\t2000000'));
+
+  // ---- image transcription via Claude vision — fake Anthropic client, no network ----
+  let visionCall = null;
+  const fakeVision = {
+    messages: {
+      create: async (params) => {
+        visionCall = params;
+        return { stop_reason: 'end_turn', content: [{ type: 'text', text: 'Lease for 123 Main St, base rent $6.50/SF.' }] };
+      },
+    },
+  };
+  const imgText = await abstract.transcribeWithVision(fakeVision, Buffer.from('PNGBYTES'), 'image/png');
+  check('vision returns transcribed text', imgText.includes('123 Main St'));
+  const imgContent = visionCall.messages[0].content;
+  check('vision sends an image block for an image', imgContent[0].type === 'image' && imgContent[0].source.media_type === 'image/png');
+  check('vision base64-encodes the buffer', imgContent[0].source.data === Buffer.from('PNGBYTES').toString('base64'));
+  check('vision source precedes the text instruction', imgContent[0].type === 'image' && imgContent[1].type === 'text');
+
+  // source-block type is chosen by media type: pdf -> document, image -> image
+  check('visionSourceBlock pdf is a document block', abstract.visionSourceBlock(Buffer.from('x'), 'application/pdf').type === 'document');
+  check('visionSourceBlock image is an image block', abstract.visionSourceBlock(Buffer.from('x'), 'image/jpeg').type === 'image');
 
   // ---- PDF OCR fallback (scanned/image PDFs) — fake Anthropic client, no network ----
   const fakePdf = Buffer.from('%PDF-1.4 fake scanned bytes');

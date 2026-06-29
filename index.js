@@ -4,7 +4,8 @@ const pdf = require('pdf-parse');
 const mammoth = require('mammoth');
 const { getDocument } = require('pdfjs-dist/legacy/build/pdf.mjs');
 const JSZip = require('jszip');
-const { abstractDocument, summarizeFallback, ocrPdf, renderAbstract } = require('./abstract');
+const ExcelJS = require('exceljs');
+const { abstractDocument, summarizeFallback, ocrPdf, transcribeWithVision, renderAbstract } = require('./abstract');
 const sheets = require('./sheets');
 
 // ---------------------------------------------------------------------------
@@ -13,7 +14,7 @@ const sheets = require('./sheets');
 const REQUIRED_ENV = ['SLACK_BOT_TOKEN', 'SLACK_SIGNING_SECRET', 'ANTHROPIC_API_KEY'];
 const MIN_TEXT_LENGTH = 50; // below this, extraction effectively failed
 const MAX_CONTENT_CHARS = 24000; // ~6-8k tokens; long docs are truncated with a note
-const MAX_PDF_OCR_BYTES = 30 * 1024 * 1024; // Anthropic's PDF request limit is 32MB; stay under it
+const MAX_VISION_BYTES = 30 * 1024 * 1024; // Anthropic's request limit is 32MB; stay under it for PDF OCR + images
 const MAX_DEDUPE_ENTRIES = 1000;
 const DEFAULT_PORT = 3000;
 
@@ -31,8 +32,22 @@ function getFileKind(file) {
   const mime = file.mimetype || '';
   if (mime === 'application/pdf' || name.endsWith('.pdf')) return 'pdf';
   if (mime.includes('wordprocessingml') || name.endsWith('.docx')) return 'docx';
+  if (mime.includes('spreadsheetml') || /\.xlsx$/.test(name)) return 'xlsx';
+  if (mime.startsWith('image/') || /\.(png|jpe?g|gif|webp)$/.test(name)) return 'image';
   if (mime.startsWith('text/') || /\.(txt|csv|md|json|xml|html?|log)$/.test(name)) return 'text';
   return 'unsupported';
+}
+
+// Map an image file to a Claude-supported media type. Vision accepts PNG, JPEG,
+// GIF, and WebP; default to PNG when the type can't be determined.
+function imageMediaType(file) {
+  const name = (file.name || '').toLowerCase();
+  const mime = file.mimetype || '';
+  if (mime === 'image/jpeg' || /\.jpe?g$/.test(name)) return 'image/jpeg';
+  if (mime === 'image/gif' || name.endsWith('.gif')) return 'image/gif';
+  if (mime === 'image/webp' || name.endsWith('.webp')) return 'image/webp';
+  if (mime === 'image/png' || name.endsWith('.png')) return 'image/png';
+  return mime.startsWith('image/') ? mime : 'image/png';
 }
 
 // ---------------------------------------------------------------------------
@@ -159,9 +174,53 @@ async function extractDocxText(buffer) {
   return cleanText + '\n\n--- TRACKED CHANGES ---\n' + changes.join('\n');
 }
 
+// ---------------------------------------------------------------------------
+// XLSX extraction: read actual cell values (incl. cached formula results) sheet
+// by sheet, as tab-separated rows so the LLM sees the real numbers and labels.
+// ---------------------------------------------------------------------------
+function formatExcelDate(date) {
+  return date.toISOString().slice(0, 10); // YYYY-MM-DD — what an analyst wants
+}
+
+function cellToString(cell) {
+  const v = cell.value;
+  if (v === null || v === undefined) return '';
+  if (v instanceof Date) return formatExcelDate(v);
+  if (typeof v === 'object') {
+    if (v.result !== null && v.result !== undefined) {
+      return v.result instanceof Date ? formatExcelDate(v.result) : String(v.result); // formula w/ cached result
+    }
+    if (v.formula !== undefined) return ''; // formula, no cached value
+    if (Array.isArray(v.richText)) return v.richText.map((t) => t.text).join('');
+    if (v.text !== undefined) return String(v.text); // hyperlink
+    if (v.error) return String(v.error);
+    return cell.text || '';
+  }
+  return String(v);
+}
+
+async function extractXlsxText(buffer) {
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(buffer);
+  const sheets = [];
+  workbook.eachSheet((sheet) => {
+    const rows = [];
+    sheet.eachRow({ includeEmpty: false }, (row) => {
+      const cells = [];
+      // includeEmpty:true fills internal gaps so columns stay aligned within a row
+      row.eachCell({ includeEmpty: true }, (cell) => cells.push(cellToString(cell)));
+      const line = cells.join('\t');
+      if (line.trim()) rows.push(line);
+    });
+    if (rows.length) sheets.push('--- SHEET: ' + sheet.name + ' ---\n' + rows.join('\n'));
+  });
+  return sheets.join('\n\n');
+}
+
 async function extractByKind(kind, buffer) {
   if (kind === 'pdf') return extractPdfText(buffer);
   if (kind === 'docx') return extractDocxText(buffer);
+  if (kind === 'xlsx') return extractXlsxText(buffer);
   return buffer.toString('utf8'); // text
 }
 
@@ -197,12 +256,15 @@ function assertEnv() {
 
 module.exports = {
   getFileKind,
+  imageMediaType,
   formatFieldValue,
   decodeXmlEntities,
   textFromTags,
   collectTrackedChanges,
   extractDocxText,
   extractPdfText,
+  extractXlsxText,
+  cellToString,
   extractByKind,
   clampContent,
 };
@@ -248,30 +310,47 @@ function main() {
 
     const kind = getFileKind(file);
     if (kind === 'unsupported') {
-      await reply(client, event, `I can't read "${file.name}" yet — I support PDF, Word (.docx), and text files.`);
+      await reply(
+        client,
+        event,
+        `I can't read "${file.name}" yet — I support PDF, Word (.docx), Excel (.xlsx), images (PNG/JPG), and text files.`
+      );
+      return;
+    }
+
+    if (kind !== 'text' && file.size > MAX_VISION_BYTES) {
+      await reply(
+        client,
+        event,
+        `I downloaded "${file.name}" but it's too large (${Math.round(file.size / 1024 / 1024)}MB) for me to process. Please split it or send a smaller file.`
+      );
       return;
     }
 
     log('processing', file.name, file.mimetype, file.size);
     const buffer = await downloadFile(file);
-    let text = await extractByKind(kind, buffer);
 
-    // Scanned / image-only PDFs have no embedded text layer. Rather than asking
-    // the user to OCR and re-upload, OCR it ourselves via Claude's vision.
-    if (kind === 'pdf' && (!text || text.trim().length < MIN_TEXT_LENGTH)) {
-      if (buffer.length > MAX_PDF_OCR_BYTES) {
-        await reply(
-          client,
-          event,
-          `I downloaded "${file.name}" but it has no readable text layer and is too large (${Math.round(buffer.length / 1024 / 1024)}MB) for me to OCR. Please split it or export a smaller text-based PDF.`
-        );
-        return;
-      }
-      log('no embedded text; running OCR via Claude:', file.name);
+    let text;
+    if (kind === 'image') {
+      // Images have no text layer — Claude vision is the only path.
+      log('image upload; transcribing via Claude vision:', file.name);
       try {
-        text = await ocrPdf(anthropic, buffer);
+        text = await transcribeWithVision(anthropic, buffer, imageMediaType(file));
       } catch (e) {
-        logError('OCR failed:', e.message);
+        logError('image transcription failed:', e.message);
+      }
+    } else {
+      text = await extractByKind(kind, buffer);
+
+      // Scanned / image-only PDFs have no embedded text layer. Rather than asking
+      // the user to OCR and re-upload, OCR it ourselves via Claude's vision.
+      if (kind === 'pdf' && (!text || text.trim().length < MIN_TEXT_LENGTH)) {
+        log('no embedded text; running OCR via Claude:', file.name);
+        try {
+          text = await ocrPdf(anthropic, buffer);
+        } catch (e) {
+          logError('OCR failed:', e.message);
+        }
       }
     }
 
@@ -279,7 +358,7 @@ function main() {
       await reply(
         client,
         event,
-        `I downloaded "${file.name}" but couldn't read any text from it, even after OCR. It may be empty, corrupted, or an unsupported format.`
+        `I downloaded "${file.name}" but couldn't read any usable content from it${kind === 'image' || kind === 'pdf' ? ', even with OCR' : ''}. It may be empty, corrupted, or password-protected.`
       );
       return;
     }
