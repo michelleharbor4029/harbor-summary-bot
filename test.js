@@ -100,29 +100,26 @@ function check(name, cond) {
   };
   const rendered = abstract.renderAbstract(sample, 'lease.pdf', false);
   check('render header has type, file, confidence', rendered.startsWith('*Lease* · lease.pdf · conf: high'));
-  check('render shows party', rendered.includes('Landlord: Harbor Industrial LLC'));
-  check('render shows property line', rendered.includes('123 Main St · 50,000 SF · Industrial'));
-  check('render shows financial', rendered.includes('Base Rent: $6.50/SF/YR'));
-  check('render shows key date', rendered.includes('Commencement: 2026-07-01'));
-  check('render shows redline', rendered.includes('ADDED: early termination option in year 3'));
-  check('render shows risk flag', rendered.includes('Early termination right reduces WALT'));
-  // dense layout: one labeled line per section, items joined by ' · ', no bullets
-  check('dense financials on one line', rendered.includes('*Financials:* Base Rent: $6.50/SF/YR · Security Deposit: $50,000'));
-  check('dense parties on one line', rendered.includes('*Parties:* Landlord: Harbor Industrial LLC · Tenant: Acme Logistics'));
-  check('dense uses bold section labels', rendered.includes('*Dates:*') && rendered.includes('*Terms:*') && rendered.includes('*Redlines:*') && rendered.includes('*Risks:*'));
-  check('dense has no bullet lines', !rendered.includes('\n- '));
+  check('render shows the prose summary paragraph', rendered.includes('Industrial NNN lease at 123 Main St.'));
+  check('render breaks out risks', rendered.includes('*Risks:* Early termination right reduces WALT'));
+  check('render breaks out redlines', rendered.includes('*Redlines:* ADDED: early termination option in year 3'));
+  // structured detail folds into the prose + the Sheet — not shown as labeled Slack lines
+  check('no Parties line in slack', !rendered.includes('*Parties:*') && !rendered.includes('Landlord: Harbor Industrial LLC'));
+  check('no Financials line in slack', !rendered.includes('*Financials:*') && !rendered.includes('Base Rent:'));
+  check('no Property/Dates/Terms lines in slack', !rendered.includes('*Property:*') && !rendered.includes('*Dates:*') && !rendered.includes('*Terms:*'));
+  check('lean structure: header + paragraph + 2 breakout lines', rendered.split('\n').length <= 4);
 
-  // empty sections are omitted entirely (no empty labeled line)
+  // empty risks/redlines are omitted; a bare doc is just header + paragraph
   const sparse = {
-    documentType: 'Invoice', summary: 'Vendor invoice.', parties: [],
+    documentType: 'Invoice', summary: 'Vendor invoice from Acme for $1,200, due on receipt.', parties: [],
     property: { address: '', size: '', propertyType: '' },
     financials: [{ label: 'Amount', value: '$1,200' }],
     keyDates: [], keyTerms: [], redlineChanges: [], riskFlags: [], confidence: 'medium',
   };
   const sparseOut = abstract.renderAbstract(sparse, 'inv.pdf', false);
-  check('omits empty Parties section', !sparseOut.includes('*Parties:*'));
-  check('omits empty Property section', !sparseOut.includes('*Property:*'));
-  check('keeps populated Financials', sparseOut.includes('*Financials:*') && sparseOut.includes('Amount: $1,200'));
+  check('sparse shows the summary paragraph', sparseOut.includes('Vendor invoice from Acme for $1,200'));
+  check('sparse omits empty Risks/Redlines', !sparseOut.includes('*Risks:*') && !sparseOut.includes('*Redlines:*'));
+  check('sparse is just header + paragraph', sparseOut.split('\n').length === 2);
   check('truncation note appended', abstract.renderAbstract(sparse, 'inv.pdf', true).includes('covers the first part'));
 
   // ---- XLSX cell reading (incl. cached formula results, dates, rich text) ----

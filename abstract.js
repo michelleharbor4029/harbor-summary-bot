@@ -28,7 +28,7 @@ const DEAL_SCHEMA = {
         'Operating Agreement, Title Commitment, Phase I ESA, PCA, Appraisal, Rent Roll, T-12, ' +
         'Pro Forma, Budget, Draw Schedule, Invoice, COI, Email, or Other.',
     },
-    summary: { type: 'string', description: 'ONE concise sentence: what this document is and its single most important term. No preamble, no restating the doc type.' },
+    summary: { type: 'string', description: 'A short prose paragraph (3-5 sentences, ~80 words max) summarizing the deal for an analyst: parties, property and size, key economics (rent, term, escalations, deposit, TI), key dates, and any redline or notable risk. Flowing prose — no labels, bullets, or line breaks. No preamble; do not restate the document type. This is the headline an analyst reads first.' },
     parties: {
       type: 'array',
       description: 'Each named party with its role (Landlord, Tenant, Buyer, Seller, Lender, Borrower, etc.).',
@@ -98,7 +98,8 @@ Rules:
 - Put money terms in financials, dated milestones in keyDates, and other material terms in keyTerms.
 - Use riskFlags for anything off-market or worth flagging to an analyst.
 - Set confidence to "low" if the document was hard to read or mostly missing data.
-- Be terse. Every value, term, and flag is a short phrase, not a sentence (e.g. "$6.50/SF/YR NNN", "3% annual escalations", "below-market rent"). Strip filler words and articles. List all material items, but never pad — an analyst skims this.`;
+- Be terse. Every value, term, and flag is a short phrase, not a sentence (e.g. "$6.50/SF/YR NNN", "3% annual escalations", "below-market rent"). Strip filler words and articles.
+- Be selective. Order each array MOST MATERIAL FIRST, and include only what affects an underwriting read. Omit standard boilerplate (parking counts, holdover %, standard use clauses, late fees, routine notice mechanics) unless off-market or specifically negotiated. Leaving out minor or redundant detail is expected — an analyst skims this.`;
 
 const FALLBACK_PROMPT = `Summarize this document for Harbor Capital (commercial real estate private equity, industrial focus).
 Extract key facts only — parties, property, size, term, rents/prices, earnest money, key dates, and any redline changes.
@@ -167,35 +168,25 @@ function ocrPdf(anthropic, buffer) {
   return transcribeWithVision(anthropic, buffer, 'application/pdf');
 }
 
-function propertyLine(property) {
-  if (!property) return '';
-  return [property.address, property.size, property.propertyType]
-    .map((s) => (s || '').trim())
-    .filter(Boolean)
-    .join(' · ');
-}
-
-// One dense line per section: "*Label:* item · item · item". Every item is kept;
-// the section is omitted entirely when empty. No blank lines, no per-item bullets —
-// this is what keeps a full lease to ~8-10 lines instead of ~40.
+// One breakout line: "*Label:* item · item · item". Omitted entirely when empty.
 function section(label, items) {
   const filtered = (items || []).filter(Boolean);
   if (filtered.length === 0) return '';
   return '\n*' + label + ':* ' + filtered.join(' · ');
 }
 
+// Slack render is a lean headline: a short prose paragraph (the summary) plus the
+// two "alert" lines an analyst shouldn't have to dig out of prose — risks and
+// redlines. Parties, property, financials, dates, and terms are woven into the
+// paragraph for Slack and exported in full to the deal Sheet, not shown here.
+// Targets ~6-8 wrapped lines: header (1) + paragraph (~4) + up to two breakout lines.
 function renderAbstract(abstract, fileName, truncated) {
   const a = abstract || {};
   const header = `*${a.documentType || 'Document'}* · ${fileName} · conf: ${a.confidence || 'n/a'}`;
   const body =
     (a.summary ? '\n' + a.summary : '') +
-    section('Parties', (a.parties || []).map((p) => `${p.role}: ${p.name}`)) +
-    section('Property', [propertyLine(a.property)]) +
-    section('Financials', (a.financials || []).map((f) => `${f.label}: ${f.value}`)) +
-    section('Dates', (a.keyDates || []).map((d) => `${d.label}: ${d.date}`)) +
-    section('Terms', (a.keyTerms || []).map((t) => `${t.label}: ${t.value}`)) +
-    section('Redlines', a.redlineChanges) +
-    section('Risks', a.riskFlags);
+    section('Risks', a.riskFlags) +
+    section('Redlines', a.redlineChanges);
   const note = truncated ? '\n_(document was long; this summary covers the first part)_' : '';
   return header + body + note;
 }
@@ -209,5 +200,4 @@ module.exports = {
   transcribeWithVision,
   visionSourceBlock,
   renderAbstract,
-  propertyLine,
 };
