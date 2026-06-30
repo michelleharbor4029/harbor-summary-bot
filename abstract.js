@@ -28,7 +28,7 @@ const DEAL_SCHEMA = {
         'Operating Agreement, Title Commitment, Phase I ESA, PCA, Appraisal, Rent Roll, T-12, ' +
         'Pro Forma, Budget, Draw Schedule, Invoice, COI, Email, or Other.',
     },
-    summary: { type: 'string', description: 'One or two plain sentences: what this document is and its headline terms.' },
+    summary: { type: 'string', description: 'ONE concise sentence: what this document is and its single most important term. No preamble, no restating the doc type.' },
     parties: {
       type: 'array',
       description: 'Each named party with its role (Landlord, Tenant, Buyer, Seller, Lender, Borrower, etc.).',
@@ -97,11 +97,12 @@ Rules:
   - ADDED: / DELETED: lines under "TRACKED CHANGES" = Word redline edits (put these in redlineChanges)
 - Put money terms in financials, dated milestones in keyDates, and other material terms in keyTerms.
 - Use riskFlags for anything off-market or worth flagging to an analyst.
-- Set confidence to "low" if the document was hard to read or mostly missing data.`;
+- Set confidence to "low" if the document was hard to read or mostly missing data.
+- Be terse. Every value, term, and flag is a short phrase, not a sentence (e.g. "$6.50/SF/YR NNN", "3% annual escalations", "below-market rent"). Strip filler words and articles. List all material items, but never pad — an analyst skims this.`;
 
 const FALLBACK_PROMPT = `Summarize this document for Harbor Capital (commercial real estate private equity, industrial focus).
 Extract key facts only — parties, property, size, term, rents/prices, earnest money, key dates, and any redline changes.
-Start each line with a dash. No markdown, no headers, no bold. Skip fields that are not present; do not invent anything.`;
+Start each line with a dash. Each line is a short phrase, not a sentence — strip filler words and articles. No markdown, no headers, no bold, no intro line. Skip fields that are not present; do not invent anything.`;
 
 const OCR_PROMPT = `This file has no extractable text layer — it is a scan, photo, or image. Transcribe ALL readable text from it (every page, if multi-page), in reading order, exactly as written.
 
