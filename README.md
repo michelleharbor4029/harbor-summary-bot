@@ -13,8 +13,10 @@ redlines), and posts a structured deal abstraction back in-thread.
   the document body, headers, and footers.
 - **Excel (.xlsx)** — every sheet's actual cell values (including cached formula
   results and dates), read row by row so the model sees the real numbers.
-- **Images (PNG / JPG / GIF / WebP)** — transcribed via Claude vision.
 - **Text** — `.txt`, `.csv`, `.md`, `.json`, `.xml`, `.html`, `.log`.
+
+Image uploads (PNG, JPG, etc.) are intentionally ignored — the bot does not
+reply to them.
 
 A scanned/image PDF is sent to Claude for OCR automatically — no need to OCR and
 re-upload it yourself. Files over 30MB, content that's still unreadable after OCR,

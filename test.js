@@ -29,12 +29,6 @@ function check(name, cond) {
   check('image by mimetype', extract.getFileKind({ mimetype: 'image/jpeg' }) === 'image');
   check('legacy .xls unsupported', extract.getFileKind({ name: 'old.xls' }) === 'unsupported');
 
-  // ---- image media-type mapping (for Claude vision) ----
-  check('png media type', extract.imageMediaType({ name: 'scan.png' }) === 'image/png');
-  check('jpg media type', extract.imageMediaType({ name: 'photo.JPG' }) === 'image/jpeg');
-  check('jpeg by mime', extract.imageMediaType({ mimetype: 'image/jpeg' }) === 'image/jpeg');
-  check('webp media type', extract.imageMediaType({ name: 'pic.webp' }) === 'image/webp');
-
   // ---- PDF form-field value formatting ("blue text") ----
   check('off checkbox empty', extract.formatFieldValue('Off') === '');
   check('trims value', extract.formatFieldValue('  Acme LLC ') === 'Acme LLC');

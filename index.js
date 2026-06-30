@@ -5,7 +5,7 @@ const mammoth = require('mammoth');
 const { getDocument } = require('pdfjs-dist/legacy/build/pdf.mjs');
 const JSZip = require('jszip');
 const ExcelJS = require('exceljs');
-const { abstractDocument, summarizeFallback, ocrPdf, transcribeWithVision, renderAbstract } = require('./abstract');
+const { abstractDocument, summarizeFallback, ocrPdf, renderAbstract } = require('./abstract');
 const sheets = require('./sheets');
 
 // ---------------------------------------------------------------------------
@@ -36,18 +36,6 @@ function getFileKind(file) {
   if (mime.startsWith('image/') || /\.(png|jpe?g|gif|webp)$/.test(name)) return 'image';
   if (mime.startsWith('text/') || /\.(txt|csv|md|json|xml|html?|log)$/.test(name)) return 'text';
   return 'unsupported';
-}
-
-// Map an image file to a Claude-supported media type. Vision accepts PNG, JPEG,
-// GIF, and WebP; default to PNG when the type can't be determined.
-function imageMediaType(file) {
-  const name = (file.name || '').toLowerCase();
-  const mime = file.mimetype || '';
-  if (mime === 'image/jpeg' || /\.jpe?g$/.test(name)) return 'image/jpeg';
-  if (mime === 'image/gif' || name.endsWith('.gif')) return 'image/gif';
-  if (mime === 'image/webp' || name.endsWith('.webp')) return 'image/webp';
-  if (mime === 'image/png' || name.endsWith('.png')) return 'image/png';
-  return mime.startsWith('image/') ? mime : 'image/png';
 }
 
 // ---------------------------------------------------------------------------
@@ -256,7 +244,6 @@ function assertEnv() {
 
 module.exports = {
   getFileKind,
-  imageMediaType,
   formatFieldValue,
   decodeXmlEntities,
   textFromTags,
@@ -309,11 +296,18 @@ function main() {
     }
 
     const kind = getFileKind(file);
+
+    // Images are intentionally ignored — the bot does not reply to image uploads.
+    if (kind === 'image') {
+      log('skip (image upload, not replying):', file.name);
+      return;
+    }
+
     if (kind === 'unsupported') {
       await reply(
         client,
         event,
-        `I can't read "${file.name}" yet — I support PDF, Word (.docx), Excel (.xlsx), images (PNG/JPG), and text files.`
+        `I can't read "${file.name}" yet — I support PDF, Word (.docx), Excel (.xlsx), and text files.`
       );
       return;
     }
@@ -329,28 +323,16 @@ function main() {
 
     log('processing', file.name, file.mimetype, file.size);
     const buffer = await downloadFile(file);
+    let text = await extractByKind(kind, buffer);
 
-    let text;
-    if (kind === 'image') {
-      // Images have no text layer — Claude vision is the only path.
-      log('image upload; transcribing via Claude vision:', file.name);
+    // Scanned / image-only PDFs have no embedded text layer. Rather than asking
+    // the user to OCR and re-upload, OCR it ourselves via Claude's vision.
+    if (kind === 'pdf' && (!text || text.trim().length < MIN_TEXT_LENGTH)) {
+      log('no embedded text; running OCR via Claude:', file.name);
       try {
-        text = await transcribeWithVision(anthropic, buffer, imageMediaType(file));
+        text = await ocrPdf(anthropic, buffer);
       } catch (e) {
-        logError('image transcription failed:', e.message);
-      }
-    } else {
-      text = await extractByKind(kind, buffer);
-
-      // Scanned / image-only PDFs have no embedded text layer. Rather than asking
-      // the user to OCR and re-upload, OCR it ourselves via Claude's vision.
-      if (kind === 'pdf' && (!text || text.trim().length < MIN_TEXT_LENGTH)) {
-        log('no embedded text; running OCR via Claude:', file.name);
-        try {
-          text = await ocrPdf(anthropic, buffer);
-        } catch (e) {
-          logError('OCR failed:', e.message);
-        }
+        logError('OCR failed:', e.message);
       }
     }
 
@@ -358,7 +340,7 @@ function main() {
       await reply(
         client,
         event,
-        `I downloaded "${file.name}" but couldn't read any usable content from it${kind === 'image' || kind === 'pdf' ? ', even with OCR' : ''}. It may be empty, corrupted, or password-protected.`
+        `I downloaded "${file.name}" but couldn't read any usable content from it${kind === 'pdf' ? ', even with OCR' : ''}. It may be empty, corrupted, or password-protected.`
       );
       return;
     }
