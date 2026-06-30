@@ -99,15 +99,20 @@ function check(name, cond) {
     confidence: 'high',
   };
   const rendered = abstract.renderAbstract(sample, 'lease.pdf', false);
-  check('render has header with type+confidence', rendered.startsWith('Summary of lease.pdf (Lease · confidence: high):'));
+  check('render header has type, file, confidence', rendered.startsWith('*Lease* · lease.pdf · conf: high'));
   check('render shows party', rendered.includes('Landlord: Harbor Industrial LLC'));
   check('render shows property line', rendered.includes('123 Main St · 50,000 SF · Industrial'));
   check('render shows financial', rendered.includes('Base Rent: $6.50/SF/YR'));
   check('render shows key date', rendered.includes('Commencement: 2026-07-01'));
   check('render shows redline', rendered.includes('ADDED: early termination option in year 3'));
   check('render shows risk flag', rendered.includes('Early termination right reduces WALT'));
+  // dense layout: one labeled line per section, items joined by ' · ', no bullets
+  check('dense financials on one line', rendered.includes('*Financials:* Base Rent: $6.50/SF/YR · Security Deposit: $50,000'));
+  check('dense parties on one line', rendered.includes('*Parties:* Landlord: Harbor Industrial LLC · Tenant: Acme Logistics'));
+  check('dense uses bold section labels', rendered.includes('*Dates:*') && rendered.includes('*Terms:*') && rendered.includes('*Redlines:*') && rendered.includes('*Risks:*'));
+  check('dense has no bullet lines', !rendered.includes('\n- '));
 
-  // empty sections are omitted, not shown as blank headers
+  // empty sections are omitted entirely (no empty labeled line)
   const sparse = {
     documentType: 'Invoice', summary: 'Vendor invoice.', parties: [],
     property: { address: '', size: '', propertyType: '' },
@@ -115,9 +120,9 @@ function check(name, cond) {
     keyDates: [], keyTerms: [], redlineChanges: [], riskFlags: [], confidence: 'medium',
   };
   const sparseOut = abstract.renderAbstract(sparse, 'inv.pdf', false);
-  check('omits empty PARTIES section', !sparseOut.includes('PARTIES'));
-  check('omits empty PROPERTY section', !sparseOut.includes('PROPERTY'));
-  check('keeps populated FINANCIALS', sparseOut.includes('FINANCIALS') && sparseOut.includes('Amount: $1,200'));
+  check('omits empty Parties section', !sparseOut.includes('*Parties:*'));
+  check('omits empty Property section', !sparseOut.includes('*Property:*'));
+  check('keeps populated Financials', sparseOut.includes('*Financials:*') && sparseOut.includes('Amount: $1,200'));
   check('truncation note appended', abstract.renderAbstract(sparse, 'inv.pdf', true).includes('covers the first part'));
 
   // ---- XLSX cell reading (incl. cached formula results, dates, rich text) ----

@@ -175,25 +175,28 @@ function propertyLine(property) {
     .join(' · ');
 }
 
-function section(title, lines) {
-  const filtered = (lines || []).filter(Boolean);
+// One dense line per section: "*Label:* item · item · item". Every item is kept;
+// the section is omitted entirely when empty. No blank lines, no per-item bullets —
+// this is what keeps a full lease to ~8-10 lines instead of ~40.
+function section(label, items) {
+  const filtered = (items || []).filter(Boolean);
   if (filtered.length === 0) return '';
-  return '\n\n' + title + '\n' + filtered.map((l) => '- ' + l).join('\n');
+  return '\n*' + label + ':* ' + filtered.join(' · ');
 }
 
 function renderAbstract(abstract, fileName, truncated) {
   const a = abstract || {};
-  const header = `Summary of ${fileName} (${a.documentType || 'Document'} · confidence: ${a.confidence || 'n/a'}):`;
+  const header = `*${a.documentType || 'Document'}* · ${fileName} · conf: ${a.confidence || 'n/a'}`;
   const body =
     (a.summary ? '\n' + a.summary : '') +
-    section('PARTIES', (a.parties || []).map((p) => `${p.role}: ${p.name}`)) +
-    section('PROPERTY', [propertyLine(a.property)]) +
-    section('FINANCIALS', (a.financials || []).map((f) => `${f.label}: ${f.value}`)) +
-    section('KEY DATES', (a.keyDates || []).map((d) => `${d.label}: ${d.date}`)) +
-    section('KEY TERMS', (a.keyTerms || []).map((t) => `${t.label}: ${t.value}`)) +
-    section('TRACKED CHANGES / REDLINES', a.redlineChanges) +
-    section('RISK FLAGS', a.riskFlags);
-  const note = truncated ? '\n\n(Note: document was long; this summary covers the first part.)' : '';
+    section('Parties', (a.parties || []).map((p) => `${p.role}: ${p.name}`)) +
+    section('Property', [propertyLine(a.property)]) +
+    section('Financials', (a.financials || []).map((f) => `${f.label}: ${f.value}`)) +
+    section('Dates', (a.keyDates || []).map((d) => `${d.label}: ${d.date}`)) +
+    section('Terms', (a.keyTerms || []).map((t) => `${t.label}: ${t.value}`)) +
+    section('Redlines', a.redlineChanges) +
+    section('Risks', a.riskFlags);
+  const note = truncated ? '\n_(document was long; this summary covers the first part)_' : '';
   return header + body + note;
 }
 
